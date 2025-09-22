@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modbus OPC UA Bridge</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; line-height: 1.6; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        header { background: #2c3e50; color: white; padding: 1rem; text-align: center; }
+        nav { background: #34495e; padding: 0.5rem; }
+        nav a { color: white; text-decoration: none; margin: 0 1rem; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .device { border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin: 10px 0; }
+        .tag { display: inline-block; background: #ecf0f1; padding: 8px 12px; margin: 5px; border-radius: 4px; position: relative; }
+        .value { font-weight: bold; color: #2c3e50; }
+        .writable { border-left: 4px solid #27ae60; cursor: pointer; }
+        .writable:hover { background: #d5f4e6; }
+        .readonly { border-left: 4px solid #bdc3c7; }
+        .connected { color: #27ae60; }
+        .disconnected { color: #e74c3c; }
+        .btn { background: #3498db; color: white; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn-danger { background: #e74c3c; }
+        .btn-success { background: #27ae60; }
+        .btn:hover { opacity: 0.8; }
+        .write-form { background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0; display: none; }
+        .write-form input { margin: 5px 0; padding: 5px; width: 100px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Modbus OPC UA Bridge</h1>
+    </header>
+    <nav>
+        <a href="/">Главная</a>
+        <a href="/add-device">Добавить устройство</a>
+    </nav>
+    
+    <div class="container">
+        <div class="card">
+            <h2>Подключенные устройства</h2>
+            <a href="/add-device" class="btn">Добавить устройство</a>
+            
+            <div id="devicesList">
+                <p>Загрузка устройств...</p>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>OPC UA информация</h2>
+            <p><strong>Endpoint URL:</strong> opc.tcp://localhost:52000/UA/MyServer</p>
+            <p><strong>Статус:</strong> <span class="connected">●</span> Сервер запущен</p>
+        </div>
+    </div>
+
+    <script>
+        let currentValues = {};
+        
+        async function loadDevices() {
+            try {
+                const response = await fetch('/api/devices');
+                const devices = await response.json();
+                
+                const devicesList = document.getElementById('devicesList');
+                devicesList.innerHTML = '';
+                
+                if (devices.length === 0) {
+                    devicesList.innerHTML = '<p>Нет подключенных устройств</p>';
+                    return;
+                }
+                
+                devices.forEach(device => {
+                    const deviceDiv = document.createElement('div');
+                    deviceDiv.className = 'device';
+                    deviceDiv.innerHTML = `
+                        <h3>${device.name} <span class="${device.connected ? 'connected' : 'disconnected'}">●</span></h3>
+                        <p><strong>Тип:</strong> ${device.type === 'tcp' ? 'Modbus TCP' : 'Modbus RTU'}</p>
+                        <p><strong>Адрес:</strong> ${device.address}</p>
+                        <p><strong>ID устройства:</strong> ${device.deviceId}</p>
+                        <p><strong>Теги:</strong></p>
+                        <div id="tags-${device.id}">Загрузка значений...</div>
+                        <br>
+                        <button class="btn btn-danger" onclick="deleteDevice('${device.id}')">Удалить</button>
+                    `;
+                    devicesList.appendChild(deviceDiv);
+                    
+                    // Загружаем значения для этого устройства
+                    loadDeviceValues(device.id);
+                });
+            } catch (error) {
+                console.error('Ошибка загрузки устройств:', error);
+            }
+        }
+        
+        async function loadDeviceValues(deviceId) {
+            try {
+                const response = await fetch('/api/values');
+                const values = await response.json();
+                
+                currentValues[deviceId] = values[deviceId];
+                
+                const tagsDiv = document.getElementById(`tags-${deviceId}`);
+                if (tagsDiv && values[deviceId]) {
+                    let html = '';
+                    Object.entries(values[deviceId].tags).forEach(([tagName, tagData]) => {
+                        const isWritable = tagData.writable;
+                        html += `
+                            <div class="tag ${isWritable ? 'writable' : 'readonly'}" 
+                                 onclick="${isWritable ? `showWriteForm('${deviceId}', '${tagName}', ${tagData.value})` : ''}">
+                                ${tagName}: <span class="value">${tagData.value}</span>
+                                ${isWritable ? '✏️' : '👁️'}
+                            </div>
+                            ${isWritable ? `
+                                <div class="write-form" id="write-form-${deviceId}-${tagName}">
+                                    <input type="number" id="write-value-${deviceId}-${tagName}" value="${tagData.value}" step="any">
+                                    <button class="btn btn-success" onclick="writeTagValue('${deviceId}', '${tagName}')">Записать</button>
+                                    <button class="btn" onclick="hideWriteForm('${deviceId}', '${tagName}')">Отмена</button>
+                                </div>
+                            ` : ''}
+                        `;
+                    });
+                    tagsDiv.innerHTML = html;
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки значений:', error);
+            }
+        }
+        
+        function showWriteForm(deviceId, tagName, currentValue) {
+            // Скрываем все формы
+            document.querySelectorAll('.write-form').forEach(form => {
+                form.style.display = 'none';
+            });
+            
+            // Показываем нужную форму
+            const form = document.getElementById(`write-form-${deviceId}-${tagName}`);
+            if (form) {
+                form.style.display = 'block';
+                document.getElementById(`write-value-${deviceId}-${tagName}`).value = currentValue;
+            }
+        }
+        
+        function hideWriteForm(deviceId, tagName) {
+            const form = document.getElementById(`write-form-${deviceId}-${tagName}`);
+            if (form) {
+                form.style.display = 'none';
+            }
+        }
+        
+        async function writeTagValue(deviceId, tagName) {
+            const input = document.getElementById(`write-value-${deviceId}-${tagName}`);
+            const value = input.value;
+            
+            try {
+                const response = await fetch('/api/write', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        deviceId: deviceId,
+                        tagName: tagName,
+                        value: value
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(`Значение успешно записано: ${value}`);
+                    hideWriteForm(deviceId, tagName);
+                    // Обновляем значение на странице
+                    const valueSpan = document.querySelector(`#tags-${deviceId} .tag[onclick*="${tagName}"] .value`);
+                    if (valueSpan) {
+                        valueSpan.textContent = value;
+                    }
+                } else {
+                    alert('Ошибка записи: ' + result.error);
+                }
+            } catch (error) {
+                alert('Ошибка сети: ' + error.message);
+            }
+        }
+        
+        async function deleteDevice(deviceId) {
+            if (confirm('Вы уверены, что хотите удалить это устройство?')) {
+                try {
+                    const response = await fetch(`/api/devices/${deviceId}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (response.ok) {
+                        loadDevices();
+                    } else {
+                        alert('Ошибка при удалении устройства');
+                    }
+                } catch (error) {
+                    console.error('Ошибка удаления устройства:', error);
+                }
+            }
+        }
+        
+        // Загружаем устройства при загрузке страницы
+        loadDevices();
+        
+        // Обновляем значения каждые 2 секунды
+        setInterval(() => {
+            const devices = document.querySelectorAll('.device');
+            devices.forEach(device => {
+                const id = device.querySelector('button').onclick.toString().match(/'([^']+)'/)[1];
+                loadDeviceValues(id);
+            });
+        }, 5000);
+    </script>
+</body>
+</html>

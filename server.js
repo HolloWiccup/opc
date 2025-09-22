@@ -189,7 +189,7 @@ async function main() {
         loadDevicesConfig();
 
         // Запускаем веб-сервер
-        webApp.listen(WEB_PORT, () => {
+        webApp.listen(WEB_PORT, '0.0.0.0', () => {
             console.log(`Веб-интерфейс доступен по адресу: http://localhost:${WEB_PORT}`);
         });
 
